@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "letterboxd-followbot"
+version = "0.0.0"
+description = ""
+authors = ["Jan Dittrich <mail@jand.one>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+python-dotenv = "^1.0.1"
+python-telegram-bot = "^21.10"
+sqlalchemy = "^2.0.37"
+httpx = "^0.28.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
