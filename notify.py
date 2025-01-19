@@ -208,163 +208,164 @@ class Util:
 async def notify():
     logging.basicConfig(level=logging.INFO)
 
-    with Session(engine) as session:
-        # iterate over all follow members
-        for follow_member in session.query(FollowMember).all():
-            # get the chat
-            chat = session.get(Chat, follow_member.chat_id)
-            member_id = follow_member.member_id
-            last_checked_at = follow_member.last_checked_at.replace(tzinfo=timezone.utc)
+    while True:
+        with Session(engine) as session:
+            # iterate over all follow members
+            for follow_member in session.query(FollowMember).all():
+                # get the chat
+                chat = session.get(Chat, follow_member.chat_id)
+                member_id = follow_member.member_id
+                last_checked_at = follow_member.last_checked_at.replace(tzinfo=timezone.utc)
 
-            new_activities = []
-            logging.info("Search activities for {}/{}. Last checked {}".format(chat.title, member_id, last_checked_at))
+                new_activities = []
+                logging.info("Search activities for {}/{}. Last checked {}".format(chat.title, member_id, last_checked_at))
 
-            done = False
-            cursor = None
-            while not done:
+                done = False
+                cursor = None
+                while not done:
 
-                activities = letterboxd_client.get_member_own_activity(
-                    member_id,
-                    include=[
-                        "DiaryEntryActivity",
-                        "ReviewActivity",
-                        "WatchlistActivity",
-                        "FilmLikeActivity",
-                        "FilmRatingActivity",
-                        "FilmWatchActivity",
-                    ],
-                    cursor=cursor,
-                )
+                    activities = letterboxd_client.get_member_own_activity(
+                        member_id,
+                        include=[
+                            "DiaryEntryActivity",
+                            "ReviewActivity",
+                            "WatchlistActivity",
+                            "FilmLikeActivity",
+                            "FilmRatingActivity",
+                            "FilmWatchActivity",
+                        ],
+                        cursor=cursor,
+                    )
 
-                for activity in activities["items"]:
-                    when_created = datetime.fromisoformat(activity["whenCreated"])
+                    for activity in activities["items"]:
+                        when_created = datetime.fromisoformat(activity["whenCreated"])
 
-                    if when_created <= last_checked_at:
+                        if when_created <= last_checked_at:
+                            done = True
+                            break
+                        new_activities.append(activity)
+                    if "next" not in activities:
                         done = True
-                        break
-                    new_activities.append(activity)
-                if "next" not in activities:
-                    done = True
-                else:
-                    cursor = activities["next"]
+                    else:
+                        cursor = activities["next"]
 
-            logging.info("Found {} new activities for {}/{}".format(len(new_activities), chat.title, member_id))
+                logging.info("Found {} new activities for {}/{}".format(len(new_activities), chat.title, member_id))
 
-            for activity in new_activities:
-                logging.info("Processing activity of type {}".format(activity["type"]))
+                for activity in new_activities:
+                    logging.info("Processing activity of type {}".format(activity["type"]))
 
-                match activity["type"]:
-                    case "DiaryEntryActivity":
-                        diary_entry = activity["diaryEntry"]
-                        member = activity["member"]
-                        film = diary_entry["film"]
-                        film_stats = letterboxd_client.get_film_statistics(film["id"])
+                    match activity["type"]:
+                        case "DiaryEntryActivity":
+                            diary_entry = activity["diaryEntry"]
+                            member = activity["member"]
+                            film = diary_entry["film"]
+                            film_stats = letterboxd_client.get_film_statistics(film["id"])
 
-                        caption = "📖 {} added to {} diary:\n".format(
-                            Util.escape(member["displayName"]),
-                            Util.escape(member["pronoun"]["possessiveAdjective"]),
-                        )
-
-                        caption += Util.log_details_line(diary_entry)
-                        caption += Util.log_tags_line(diary_entry)
-                        caption += "\n"
-                        caption += Util.film_title_and_year_line(film)
-                        caption += Util.directors_line(film)
-                        caption += Util.average_rating_line(film, film_stats)
-                        caption += Util.film_stats_line(film_stats)
-
-                        await Util.send_film_poster_with_caption(chat.id, film, caption)
-                        if "review" in diary_entry:
-                            await Util.send_review_message(
-                                chat.id, diary_entry["review"]
+                            caption = "📖 {} added to {} diary:\n".format(
+                                Util.escape(member["displayName"]),
+                                Util.escape(member["pronoun"]["possessiveAdjective"]),
                             )
 
-                    case "WatchlistActivity":
-                        film = activity["film"]
-                        member = activity["member"]
-                        film_stats = letterboxd_client.get_film_statistics(film["id"])
+                            caption += Util.log_details_line(diary_entry)
+                            caption += Util.log_tags_line(diary_entry)
+                            caption += "\n"
+                            caption += Util.film_title_and_year_line(film)
+                            caption += Util.directors_line(film)
+                            caption += Util.average_rating_line(film, film_stats)
+                            caption += Util.film_stats_line(film_stats)
 
-                        caption = "⌛ {} added to {} watchlist:\n".format(
-                            Util.escape(member["displayName"]),
-                            Util.escape(member["pronoun"]["possessiveAdjective"]),
-                        )
+                            await Util.send_film_poster_with_caption(chat.id, film, caption)
+                            if "review" in diary_entry:
+                                await Util.send_review_message(
+                                    chat.id, diary_entry["review"]
+                                )
 
-                        caption += "\n"
-                        caption += Util.film_title_and_year_line(film)
-                        caption += Util.directors_line(film)
-                        caption += Util.average_rating_line(film, film_stats)
-                        caption += Util.film_stats_line(film_stats)
+                        case "WatchlistActivity":
+                            film = activity["film"]
+                            member = activity["member"]
+                            film_stats = letterboxd_client.get_film_statistics(film["id"])
 
-                        await Util.send_film_poster_with_caption(chat.id, film, caption)
+                            caption = "⌛ {} added to {} watchlist:\n".format(
+                                Util.escape(member["displayName"]),
+                                Util.escape(member["pronoun"]["possessiveAdjective"]),
+                            )
 
-                    case "FilmLikeActivity":
-                        film = activity["film"]
-                        member = activity["member"]
-                        film_stats = letterboxd_client.get_film_statistics(film["id"])
+                            caption += "\n"
+                            caption += Util.film_title_and_year_line(film)
+                            caption += Util.directors_line(film)
+                            caption += Util.average_rating_line(film, film_stats)
+                            caption += Util.film_stats_line(film_stats)
 
-                        caption = "❤️ {} liked:\n".format(
-                            Util.escape(member["displayName"]),
-                        )
+                            await Util.send_film_poster_with_caption(chat.id, film, caption)
 
-                        caption += "\n"
-                        caption += Util.film_title_and_year_line(film)
-                        caption += Util.directors_line(film)
-                        caption += Util.average_rating_line(film, film_stats)
-                        caption += Util.film_stats_line(film_stats)
+                        case "FilmLikeActivity":
+                            film = activity["film"]
+                            member = activity["member"]
+                            film_stats = letterboxd_client.get_film_statistics(film["id"])
 
-                        await Util.send_film_poster_with_caption(chat.id, film, caption)
+                            caption = "❤️ {} liked:\n".format(
+                                Util.escape(member["displayName"]),
+                            )
 
-                    case "FilmRatingActivity":
-                        film = activity["film"]
-                        member = activity["member"]
-                        film_stats = letterboxd_client.get_film_statistics(film["id"])
+                            caption += "\n"
+                            caption += Util.film_title_and_year_line(film)
+                            caption += Util.directors_line(film)
+                            caption += Util.average_rating_line(film, film_stats)
+                            caption += Util.film_stats_line(film_stats)
 
-                        caption = "⭐ {} rated:\n".format(
-                            Util.escape(member["displayName"]),
-                        )
+                            await Util.send_film_poster_with_caption(chat.id, film, caption)
 
-                        caption += Util.escape(
-                            f"{Util.get_star_string(activity['rating'])}\n"
-                        )
+                        case "FilmRatingActivity":
+                            film = activity["film"]
+                            member = activity["member"]
+                            film_stats = letterboxd_client.get_film_statistics(film["id"])
 
-                        caption += "\n"
-                        caption += Util.directors_line(film)
-                        caption += Util.film_title_and_year_line(film)
-                        caption += Util.average_rating_line(film, film_stats)
-                        caption += Util.film_stats_line(film_stats)
+                            caption = "⭐ {} rated:\n".format(
+                                Util.escape(member["displayName"]),
+                            )
 
-                        await Util.send_film_poster_with_caption(chat.id, film, caption)
+                            caption += Util.escape(
+                                f"{Util.get_star_string(activity['rating'])}\n"
+                            )
 
-                    case "ReviewActivity":
-                        review_entry = activity["review"]
-                        film = review_entry["film"]
-                        member = activity["member"]
-                        film_stats = letterboxd_client.get_film_statistics(film["id"])
+                            caption += "\n"
+                            caption += Util.directors_line(film)
+                            caption += Util.film_title_and_year_line(film)
+                            caption += Util.average_rating_line(film, film_stats)
+                            caption += Util.film_stats_line(film_stats)
 
-                        caption = "📝 {} reviewed:\n".format(
-                            Util.escape(member["displayName"]),
-                        )
+                            await Util.send_film_poster_with_caption(chat.id, film, caption)
 
-                        caption += Util.log_details_line(review_entry)
-                        caption += Util.log_tags_line(review_entry)
-                        caption += "\n"
-                        caption += Util.film_title_and_year_line(film)
-                        caption += Util.directors_line(film)
-                        caption += Util.average_rating_line(film, film_stats)
-                        caption += Util.film_stats_line(film_stats)
+                        case "ReviewActivity":
+                            review_entry = activity["review"]
+                            film = review_entry["film"]
+                            member = activity["member"]
+                            film_stats = letterboxd_client.get_film_statistics(film["id"])
 
-                        await Util.send_film_poster_with_caption(chat.id, film, caption)
-                        await Util.send_review_message(chat.id, review_entry["review"])
+                            caption = "📝 {} reviewed:\n".format(
+                                Util.escape(member["displayName"]),
+                            )
 
-                await asyncio.sleep(4)
+                            caption += Util.log_details_line(review_entry)
+                            caption += Util.log_tags_line(review_entry)
+                            caption += "\n"
+                            caption += Util.film_title_and_year_line(film)
+                            caption += Util.directors_line(film)
+                            caption += Util.average_rating_line(film, film_stats)
+                            caption += Util.film_stats_line(film_stats)
 
-                print(activity["type"])
+                            await Util.send_film_poster_with_caption(chat.id, film, caption)
+                            await Util.send_review_message(chat.id, review_entry["review"])
 
-            follow_member.last_checked_at = datetime.now(timezone.utc)
-            session.commit()
+                    await asyncio.sleep(4)
 
-    logging.info("Done. Sleeping for 5 minutes")
-    await asyncio.sleep(300)
+                    print(activity["type"])
+
+                follow_member.last_checked_at = datetime.now(timezone.utc)
+                session.commit()
+
+        logging.info("Done. Sleeping for 5 minutes")
+        await asyncio.sleep(300)
 
 def main():
     asyncio.run(notify())
