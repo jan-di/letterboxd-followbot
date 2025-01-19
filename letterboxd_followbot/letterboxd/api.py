@@ -49,7 +49,36 @@ class LetterboxdClient:
         for include_value in include:
             params.append(("include", include_value))
 
-        response = httpx.get(f"{self.base_url}/search", params=params)
+        response = self.client.get(f"{self.base_url}/search", params=params)
+
+        response.raise_for_status()
+        return response.json()
+
+    def get_member_own_activity(
+        self, member_id: str, include: list[str] = [], cursor: str = None
+    ) -> dict:
+        self.__refresh_access_token()
+
+        params = [("where", "OwnActivity")]
+        for include_value in include:
+            params.append(("include", include_value))
+        if cursor is not None:
+            params.append(("cursor", cursor))
+
+        response = self.client.get(
+            f"{self.base_url}/member/{member_id}/activity", params=params
+        )
+
+        response.raise_for_status()
+
+        # entry["timestamp"] = datetime.fromisoformat(entry["timestamp"])
+
+        return response.json()
+
+    def get_film_statistics(self, film_id: str) -> dict:
+        self.__refresh_access_token()
+
+        response = self.client.get(f"{self.base_url}/film/{film_id}/statistics")
 
         response.raise_for_status()
         return response.json()

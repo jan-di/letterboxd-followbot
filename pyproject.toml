@@ -11,6 +11,7 @@ python-dotenv = "^1.0.1"
 python-telegram-bot = "^21.10"
 sqlalchemy = "^2.0.37"
 httpx = "^0.28.1"
+beautifulsoup4 = "^4.12.3"
 
 
 [build-system]
