@@ -205,7 +205,7 @@ class Util:
         )
 
 
-async def main():
+async def notify():
     logging.basicConfig(level=logging.INFO)
 
     with Session(engine) as session:
@@ -363,6 +363,11 @@ async def main():
             follow_member.last_checked_at = datetime.now(timezone.utc)
             session.commit()
 
+    logging.info("Done. Sleeping for 5 minutes")
+    await asyncio.sleep(300)
+
+def main():
+    asyncio.run(notify())
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

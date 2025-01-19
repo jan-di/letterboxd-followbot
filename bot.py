@@ -27,6 +27,7 @@ from letterboxd_followbot.database.model import (
     FollowMemberType,
 )
 from letterboxd_followbot.letterboxd.api import LetterboxdClient
+import logging
 
 engine = create_engine("sqlite:///local.db")
 
@@ -176,39 +177,50 @@ async def unfollow_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("Unfollowed all members")
 
 
-TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-app = ApplicationBuilder().token(TG_TOKEN).build()
+def main():
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
-LETTERBOXD_CLIENT_ID = os.environ.get("LETTERBOXD_CLIENT_ID")
-LETTERBOXD_CLIENT_SECRET = os.environ.get("LETTERBOXD_CLIENT_SECRET")
-letterboxd_client = LetterboxdClient(LETTERBOXD_CLIENT_ID, LETTERBOXD_CLIENT_SECRET)
+    TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+    app = ApplicationBuilder().token(TG_TOKEN).build()
 
-# results = letterboxd_client.search("jantast", include=["MemberSearchItem"])
-# print(results)
+    LETTERBOXD_CLIENT_ID = os.environ.get("LETTERBOXD_CLIENT_ID")
+    LETTERBOXD_CLIENT_SECRET = os.environ.get("LETTERBOXD_CLIENT_SECRET")
+    letterboxd_client = LetterboxdClient(LETTERBOXD_CLIENT_ID, LETTERBOXD_CLIENT_SECRET)
 
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("follow", follow_start)],
-    states={
-        FOLLOW_STATE_SEARCH_MEMBER: [
-            MessageHandler(filters.Regex("^(.*)$"), follow_search_member)
-        ],
-        FOLLOW_STATE_CONFIRM: [
-            MessageHandler(filters.Regex("^(Yes|No)$"), follow_confirm)
-        ],
-        # PHOTO: [
-        #     MessageHandler(filters.PHOTO, photo),
-        #     CommandHandler("skip", skip_photo),
-        # ],
-        # LOCATION: [
-        #     MessageHandler(filters.LOCATION, location),
-        #     CommandHandler("skip", skip_location),
-        # ],
-        # BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, bio)],
-    },
-    fallbacks=[CommandHandler("cancel", follow_cancel)],
-)
-unfollow = CommandHandler("unfollowall", unfollow_all)
-app.add_handler(unfollow)
-app.add_handler(conv_handler)
+    # results = letterboxd_client.search("jantast", include=["MemberSearchItem"])
+    # print(results)
 
-app.run_polling(allowed_updates=Update.ALL_TYPES)
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("follow", follow_start)],
+        states={
+            FOLLOW_STATE_SEARCH_MEMBER: [
+                MessageHandler(filters.Regex("^(.*)$"), follow_search_member)
+            ],
+            FOLLOW_STATE_CONFIRM: [
+                MessageHandler(filters.Regex("^(Yes|No)$"), follow_confirm)
+            ],
+            # PHOTO: [
+            #     MessageHandler(filters.PHOTO, photo),
+            #     CommandHandler("skip", skip_photo),
+            # ],
+            # LOCATION: [
+            #     MessageHandler(filters.LOCATION, location),
+            #     CommandHandler("skip", skip_location),
+            # ],
+            # BIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, bio)],
+        },
+        fallbacks=[CommandHandler("cancel", follow_cancel)],
+    )
+    unfollow = CommandHandler("unfollowall", unfollow_all)
+    app.add_handler(unfollow)
+    app.add_handler(conv_handler)
+
+    logging.info("Starting bot")
+
+    
+
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
