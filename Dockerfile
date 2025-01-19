@@ -4,9 +4,6 @@ RUN pip3 install poetry
 
 WORKDIR /app
 
-COPY pyproject.toml poetry.lock poetry.toml README.md .
-RUN poetry install
-
 COPY . .
 RUN poetry install
 
