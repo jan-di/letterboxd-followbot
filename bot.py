@@ -29,11 +29,18 @@ from letterboxd_followbot.database.model import (
 from letterboxd_followbot.letterboxd.api import LetterboxdClient
 import logging
 
-engine = create_engine("sqlite:///local.db")
+engine = create_engine("sqlite:///data/local.db")
 
 Base.metadata.create_all(engine)
 
 dotenv.load_dotenv()
+
+TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+app = ApplicationBuilder().token(TG_TOKEN).build()
+
+LETTERBOXD_CLIENT_ID = os.environ.get("LETTERBOXD_CLIENT_ID")
+LETTERBOXD_CLIENT_SECRET = os.environ.get("LETTERBOXD_CLIENT_SECRET")
+letterboxd_client = LetterboxdClient(LETTERBOXD_CLIENT_ID, LETTERBOXD_CLIENT_SECRET)
 
 FOLLOW_STATE_SEARCH_MEMBER, FOLLOW_STATE_CONFIRM = range(2)
 
@@ -180,13 +187,6 @@ async def unfollow_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def main():
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-
-    TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-    app = ApplicationBuilder().token(TG_TOKEN).build()
-
-    LETTERBOXD_CLIENT_ID = os.environ.get("LETTERBOXD_CLIENT_ID")
-    LETTERBOXD_CLIENT_SECRET = os.environ.get("LETTERBOXD_CLIENT_SECRET")
-    letterboxd_client = LetterboxdClient(LETTERBOXD_CLIENT_ID, LETTERBOXD_CLIENT_SECRET)
 
     # results = letterboxd_client.search("jantast", include=["MemberSearchItem"])
     # print(results)

@@ -35,7 +35,7 @@ from letterboxd_followbot.database.model import (
 )
 from letterboxd_followbot.letterboxd.api import LetterboxdClient
 
-engine = create_engine("sqlite:///local.db")
+engine = create_engine("sqlite:///data/local.db")
 
 dotenv.load_dotenv()
 
