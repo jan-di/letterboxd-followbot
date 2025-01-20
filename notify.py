@@ -329,8 +329,8 @@ async def notify():
                             )
 
                             caption += "\n"
-                            caption += Util.directors_line(film)
                             caption += Util.film_title_and_year_line(film)
+                            caption += Util.directors_line(film)
                             caption += Util.average_rating_line(film, film_stats)
                             caption += Util.film_stats_line(film_stats)
 
