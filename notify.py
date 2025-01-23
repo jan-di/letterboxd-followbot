@@ -4,36 +4,22 @@ import asyncio
 import math
 import logging
 from datetime import datetime, timezone
+from dataclasses import dataclass
 
-from bs4 import BeautifulSoup
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from telegram import (
-    Update,
-    User as TelegramUser,
-    Chat as TelegramChat,
-    ForceReply,
-    ReplyKeyboardMarkup,
-)
-from telegram.helpers import escape_markdown
 from telegram.ext import (
+    ExtBot,
     ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters,
 )
 import dotenv
 
 from letterboxd_followbot.database.model import (
-    Base,
-    User,
     Chat,
     FollowMember,
-    FollowMemberType,
 )
 from letterboxd_followbot.letterboxd.api import LetterboxdClient
+from letterboxd_followbot.telegram.util import Util as TelegramUtil
 
 engine = create_engine("sqlite:///data/local.db")
 
@@ -47,81 +33,260 @@ LETTERBOXD_CLIENT_SECRET = os.environ.get("LETTERBOXD_CLIENT_SECRET")
 letterboxd_client = LetterboxdClient(LETTERBOXD_CLIENT_ID, LETTERBOXD_CLIENT_SECRET)
 
 
-class Util:
-    @staticmethod
-    def film_title_and_year_line(film: dict) -> str:
+@dataclass
+class MemberEvent:
+    def __init__(self, photo_url: str, caption: str, review: str = None):
+        self.photo_url = photo_url
+        self.caption = caption
+        self.review = review
+        self.when_created = None
+
+
+class ActivityHandler:
+    ACTIVITY_TYPES = {
+        "DiaryEntryActivity": "_process_diary_entry_activity",
+        "ReviewActivity": "_process_review_activity",
+        "WatchlistActivity": "_process_watchlist_activity",
+        "FilmLikeActivity": "_process_film_like_activity",
+        "FilmRatingActivity": "_process_film_rating_activity",
+        # "FilmWatchActivity": "_process_film_watch_activity",
+    }
+
+    def __init__(
+        self,
+        telegram_bot: ExtBot,
+        letterboxd_client: LetterboxdClient,
+    ) -> None:
+        self.telegram_bot: ExtBot = telegram_bot
+        self.letterboxd_client: LetterboxdClient = letterboxd_client
+        self.logger: logging.Logger = logging.getLogger(__name__)
+
+    def fetch_activities(self, member_id: str, after: datetime) -> list[dict]:
+        done = False
+        cursor = None
+        result = []
+        while not done:
+            activities = letterboxd_client.get_member_own_activity(
+                member_id,
+                include=self.ACTIVITY_TYPES.keys(),
+                cursor=cursor,
+            )
+
+            for activity in activities["items"]:
+                when_created = datetime.fromisoformat(activity["whenCreated"])
+
+                if when_created <= after:
+                    done = True
+                    break
+                result.append(activity)
+            if "next" not in activities:
+                done = True
+            else:
+                cursor = activities["next"]
+
+        result.reverse()
+        return result
+
+    def process_activity(self, activity: dict) -> MemberEvent:
+        activity_type = activity["type"]
+        when_created = activity["whenCreated"]
+        when_created_dt = datetime.fromisoformat(when_created)
+        member = activity["member"]
+
+        logging.info(
+            f"Processing {activity_type} created at {when_created} by {member['username']}"
+        )
+
+        if activity_type not in self.ACTIVITY_TYPES:
+            raise ValueError(f"Unknown activity type {activity_type}")
+
+        event = getattr(self, self.ACTIVITY_TYPES[activity_type])(activity)
+        event.when_created = when_created_dt
+
+        return event
+
+    def _process_diary_entry_activity(self, activity: dict) -> MemberEvent:
+        diary_entry = activity["diaryEntry"]
+        member = activity["member"]
+        film = diary_entry["film"]
+        film_stats = self.letterboxd_client.get_film_statistics(film["id"])
+
+        caption = "📖 {} added to {} diary:\n".format(
+            TelegramUtil.escape_md(member["displayName"]),
+            TelegramUtil.escape_md(member["pronoun"]["possessiveAdjective"]),
+        )
+        caption += self.__log_lines(diary_entry)
+        caption += "\n"
+        caption += self.__film_lines(film, film_stats)
+        photo_url = self.__get_largest_compatible_poster_url(film)
+        review = self.__create_review_message(diary_entry.get("review", None))
+
+        return MemberEvent(photo_url, caption, review)
+
+    def _process_review_activity(self, activity: dict) -> MemberEvent:
+        review_entry = activity["review"]
+        film = review_entry["film"]
+        member = activity["member"]
+        film_stats = letterboxd_client.get_film_statistics(film["id"])
+
+        caption = "📝 {} reviewed:\n".format(
+            TelegramUtil.escape_md(member["displayName"]),
+        )
+        caption += self.__log_lines(review_entry)
+        caption += "\n"
+        caption += self.__film_lines(film, film_stats)
+        photo_url = self.__get_largest_compatible_poster_url(film)
+        review = self.__create_review_message(review_entry.get("review", None))
+
+        return MemberEvent(photo_url, caption, review)
+
+    def _process_watchlist_activity(self, activity: dict) -> MemberEvent:
+        film = activity["film"]
+        member = activity["member"]
+        film_stats = letterboxd_client.get_film_statistics(film["id"])
+
+        caption = "⌛ {} added to {} watchlist:\n".format(
+            TelegramUtil.escape_md(member["displayName"]),
+            TelegramUtil.escape_md(member["pronoun"]["possessiveAdjective"]),
+        )
+        caption += "\n"
+        caption += self.__film_lines(film, film_stats)
+        photo_url = self.__get_largest_compatible_poster_url(film)
+
+        return MemberEvent(photo_url, caption)
+
+    def _process_film_like_activity(self, activity: dict) -> MemberEvent:
+        film = activity["film"]
+        member = activity["member"]
+        film_stats = letterboxd_client.get_film_statistics(film["id"])
+
+        caption = "❤️ {} liked:\n".format(
+            TelegramUtil.escape_md(member["displayName"]),
+        )
+        caption += "\n"
+        caption += self.__film_lines(film, film_stats)
+        photo_url = self.__get_largest_compatible_poster_url(film)
+
+        return MemberEvent(photo_url, caption)
+
+    def _process_film_rating_activity(self, activity: dict) -> MemberEvent:
+        film = activity["film"]
+        member = activity["member"]
+        film_stats = letterboxd_client.get_film_statistics(film["id"])
+
+        caption = "⭐ {} rated:\n".format(
+            TelegramUtil.escape_md(member["displayName"]),
+        )
+        caption += self.__rating_star_line(activity["rating"])
+        caption += "\n"
+        caption += self.__film_lines(film, film_stats)
+        photo_url = self.__get_largest_compatible_poster_url(film)
+
+        return MemberEvent(photo_url, caption)
+
+    # def _process_film_watch_activity(self, activity: dict) -> MemberEvent:
+    #     pass
+
+    def __get_largest_compatible_poster_url(self, film: dict) -> dict:
+        largest_poster = film["poster"]["sizes"][-1]
+        # TODO check for max width, height and ratio
+        return largest_poster["url"]
+
+    def __create_review_message(chat_id: int, review: dict | None) -> str | None:
+        if review is None:
+            return None
+
+        title = "📝 Review:"
+        text = review["text"]
+        if review["containsSpoilers"]:
+            title += " 🚨 Spoiler Alert 🚨"
+            text = f"<tg-spoiler>{text}</tg-spoiler>"
+
+        return f"{title}\n{TelegramUtil.sanitize_html(text)}"
+
+    def __film_lines(self, film: dict, film_stats: dict) -> str:
+        result = ""
+        result += self.__film_title_line(film)
+        result += self.__film_directors_line(film)
+        result += self.__film_rating_line(film, film_stats)
+        result += self.__film_stats_line(film_stats)
+        return result
+
+    def __log_lines(self, log_entry: dict) -> str:
+        result = ""
+        result += self.__log_details_line(log_entry)
+        result += self.__log_tags_line(log_entry)
+        return result
+
+    def __film_title_line(self, film: dict) -> str:
         letterboxd_link = ""
         for link in film["links"]:
             if link["type"] == "letterboxd":
                 letterboxd_link = link["url"]
                 break
-        return "[{}]({}) \\({}\\)\n".format(
-            Util.escape(film["name"]),
-            letterboxd_link,
-            film["releaseYear"],
-        )
 
-    @staticmethod
-    def directors_line(film: dict) -> str:
-        line = Util.escape(f"{film['directors'][0]['name']}")
+        line = "[{}]({})".format(TelegramUtil.escape_md(film["name"]), letterboxd_link)
+        if "releaseYear" in film:
+            line += " \\({}\\)".format(film["releaseYear"])
+        line += "\n"
+
+        return line
+
+    def __film_directors_line(self, film: dict) -> str:
+        line = TelegramUtil.escape_md(f"{film['directors'][0]['name']}")
         if len(film["directors"]) > 1:
-            line += Util.escape(f" + {len(film['directors']) - 1}")
+            line += TelegramUtil.escape_md(f" + {len(film['directors']) - 1}")
         return f"{line}\n"
 
-    @staticmethod
-    def average_rating_line(film: dict, film_stats: dict) -> str:
-        result = Util.escape(
-            Util.get_rating_histogram_string(film_stats["ratingsHistogram"])
+    def __film_rating_line(self, film: dict, film_stats: dict) -> str:
+        result = TelegramUtil.escape_md(
+            self.__get_rating_histogram_string(film_stats["ratingsHistogram"])
         )
         if "rating" in film:
-            result += Util.escape(f" {round(film['rating'], 1)}")
+            result += TelegramUtil.escape_md(f" {round(film['rating'], 1)}")
         result += "\n"
 
         return result
 
-    @staticmethod
-    def log_details_line(log_entry: dict) -> str:
+    def __film_stats_line(self, film_stats: dict) -> str:
+        return TelegramUtil.escape_md(
+            "👁️ {} ❤️ {} 🗒️ {}\n".format(
+                self.__round_number_with_suffix(film_stats["counts"]["watches"]),
+                self.__round_number_with_suffix(film_stats["counts"]["likes"]),
+                self.__round_number_with_suffix(film_stats["counts"]["reviews"]),
+            )
+        )
+
+    def __log_details_line(self, log_entry: dict) -> str:
         line = ""
         if "rating" in log_entry:
-            line += Util.escape(f"{Util.get_star_string(log_entry['rating'])}")
+            line += TelegramUtil.escape_md(
+                f"{self.__get_star_string(log_entry['rating'])}"
+            )
         if "like" in log_entry and log_entry["like"]:
-            line += Util.escape(" ❤️")
+            line += TelegramUtil.escape_md(" ❤️")
         if "diaryDetails" in log_entry and log_entry["diaryDetails"]["rewatch"]:
-            line += Util.escape(" 🔄")
+            line += TelegramUtil.escape_md(" 🔄")
         if "review" in log_entry:
-            line += Util.escape(" 📝")
+            line += TelegramUtil.escape_md(" 📝")
         return f"{line.strip()}\n"
 
-    @staticmethod
-    def log_tags_line(log_entry: dict) -> str:
+    def __log_tags_line(self, log_entry: dict) -> str:
         result = ""
         if len(log_entry["tags2"]) > 0:
             first = True
             for tag in log_entry["tags2"]:
-                result += Util.escape(f"{" " if not first else ""}#{tag['displayTag']}")
+                result += TelegramUtil.escape_md(
+                    f"{" " if not first else ""}#{tag['displayTag']}"
+                )
                 first = False
             result += "\n"
         return result
 
-    @staticmethod
-    def film_stats_line(film_stats: dict) -> str:
-        return Util.escape(
-            "👁️ {} ❤️ {} 🗒️ {}\n".format(
-                Util.round_number_with_suffix(film_stats["counts"]["watches"]),
-                Util.round_number_with_suffix(film_stats["counts"]["likes"]),
-                Util.round_number_with_suffix(film_stats["counts"]["reviews"]),
-            )
-        )
+    def __rating_star_line(self, rating: float) -> str:
+        return TelegramUtil.escape_md(f"{self.__get_star_string(rating)}\n")
 
-    @staticmethod
-    def get_star_string(rating: float) -> str:
-        full_stars = math.floor(rating)
-        half_star = math.ceil(rating - full_stars)
-
-        return "★" * full_stars + "½" * half_star
-
-    @staticmethod
-    def get_rating_histogram_string(ratings_histogram: list) -> str:
+    def __get_rating_histogram_string(self, ratings_histogram: list) -> str:
         result = ""
         biggest_count = max(map(lambda r: r["count"], ratings_histogram))
 
@@ -136,8 +301,13 @@ class Util:
 
         return "[" + result + "]"
 
-    @staticmethod
-    def round_number_with_suffix(number: int) -> str:
+    def __get_star_string(self, rating: float) -> str:
+        full_stars = math.floor(rating)
+        half_star = math.ceil(rating - full_stars)
+
+        return "★" * full_stars + "½" * half_star
+
+    def __round_number_with_suffix(self, number: int) -> str:
         suffixes = ["", "K", "M", "B"]
         suffix_index = 0
 
@@ -147,62 +317,21 @@ class Util:
 
         return f"{round(number, 1)}{suffixes[suffix_index]}"
 
-    @staticmethod
-    def escape(text: str) -> str:
-        return escape_markdown(text, version=2)
 
-    @staticmethod
-    def sanitize_html(text: str) -> str:
-        text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-        soup = BeautifulSoup(text, "html.parser")
-        for e in soup.find_all():
-            if e.name not in [
-                "b",
-                "strong",
-                "i",
-                "em",
-                "u",
-                "ins",
-                "s",
-                "strike",
-                "span",
-                "tg-spoiler",
-                "tg-emoji",
-                "a",
-                "code",
-                "pre",
-                "blockquote",
-            ]:
-                e.unwrap()
-        return str(soup)
+async def send_member_event(chat_id: int, event: MemberEvent):
+    photo_url = event.photo_url
+    caption = event.caption
+    review = event.review
 
-    @staticmethod
-    def get_largest_compatible_poster(film: dict) -> dict:
-        largest_poster = film["poster"]["sizes"][-1]
-        # TODO check for max width, height and ratio
-        return largest_poster
-
-    @staticmethod
-    async def send_film_poster_with_caption(
-        chat_id: int, film: dict, caption: str
-    ) -> None:
-        poster = Util.get_largest_compatible_poster(film)
+    if photo_url:
         await app.bot.send_photo(
-            chat_id, poster["url"], caption, parse_mode="MarkdownV2"
+            chat_id, photo_url, caption=caption, parse_mode="MarkdownV2"
         )
+    else:
+        await app.bot.send_message(chat_id, caption, parse_mode="MarkdownV2")
 
-    @staticmethod
-    async def send_review_message(chat_id: int, review: dict) -> None:
-        title = "📝 Review:"
-        text = review["text"]
-        if review["containsSpoilers"]:
-            title += " 🚨 Spoiler Alert 🚨"
-            text = f"<tg-spoiler>{text}</tg-spoiler>"
-        await app.bot.send_message(
-            chat_id,
-            f"{title}\n{Util.sanitize_html(text)}",
-            parse_mode="HTML",
-        )
+    if review:
+        await app.bot.send_message(chat_id, review, parse_mode="HTML")
 
 
 async def notify():
@@ -215,160 +344,47 @@ async def notify():
                 # get the chat
                 chat = session.get(Chat, follow_member.chat_id)
                 member_id = follow_member.member_id
-                last_checked_at = follow_member.last_checked_at.replace(tzinfo=timezone.utc)
+                last_checked_at = follow_member.last_checked_at.replace(
+                    tzinfo=timezone.utc
+                )
 
-                new_activities = []
-                logging.info("Search activities for {}/{}. Last checked {}".format(chat.title, member_id, last_checked_at))
-
-                done = False
-                cursor = None
-                while not done:
-
-                    activities = letterboxd_client.get_member_own_activity(
-                        member_id,
-                        include=[
-                            "DiaryEntryActivity",
-                            "ReviewActivity",
-                            "WatchlistActivity",
-                            "FilmLikeActivity",
-                            "FilmRatingActivity",
-                            "FilmWatchActivity",
-                        ],
-                        cursor=cursor,
+                logging.info(
+                    "Search activities for {}/{}. Last checked {}".format(
+                        chat.title, member_id, last_checked_at
                     )
+                )
 
-                    for activity in activities["items"]:
-                        when_created = datetime.fromisoformat(activity["whenCreated"])
+                ah = ActivityHandler(app.bot, letterboxd_client)
+                activities = ah.fetch_activities(member_id, last_checked_at)
 
-                        if when_created <= last_checked_at:
-                            done = True
-                            break
-                        new_activities.append(activity)
-                    if "next" not in activities:
-                        done = True
-                    else:
-                        cursor = activities["next"]
+                logging.info(
+                    "Found {} new activities for {}/{}".format(
+                        len(activities), chat.title, member_id
+                    )
+                )
 
-                logging.info("Found {} new activities for {}/{}".format(len(new_activities), chat.title, member_id))
+                events = []
+                for activity in activities:
+                    event = ah.process_activity(activity)
+                    events.append(event)
 
-                for activity in new_activities:
-                    logging.info("Processing activity of type {}".format(activity["type"]))
+                if len(events) == 0:
+                    continue
 
-                    match activity["type"]:
-                        case "DiaryEntryActivity":
-                            diary_entry = activity["diaryEntry"]
-                            member = activity["member"]
-                            film = diary_entry["film"]
-                            film_stats = letterboxd_client.get_film_statistics(film["id"])
-
-                            caption = "📖 {} added to {} diary:\n".format(
-                                Util.escape(member["displayName"]),
-                                Util.escape(member["pronoun"]["possessiveAdjective"]),
-                            )
-
-                            caption += Util.log_details_line(diary_entry)
-                            caption += Util.log_tags_line(diary_entry)
-                            caption += "\n"
-                            caption += Util.film_title_and_year_line(film)
-                            caption += Util.directors_line(film)
-                            caption += Util.average_rating_line(film, film_stats)
-                            caption += Util.film_stats_line(film_stats)
-
-                            await Util.send_film_poster_with_caption(chat.id, film, caption)
-                            if "review" in diary_entry:
-                                await Util.send_review_message(
-                                    chat.id, diary_entry["review"]
-                                )
-
-                        case "WatchlistActivity":
-                            film = activity["film"]
-                            member = activity["member"]
-                            film_stats = letterboxd_client.get_film_statistics(film["id"])
-
-                            caption = "⌛ {} added to {} watchlist:\n".format(
-                                Util.escape(member["displayName"]),
-                                Util.escape(member["pronoun"]["possessiveAdjective"]),
-                            )
-
-                            caption += "\n"
-                            caption += Util.film_title_and_year_line(film)
-                            caption += Util.directors_line(film)
-                            caption += Util.average_rating_line(film, film_stats)
-                            caption += Util.film_stats_line(film_stats)
-
-                            await Util.send_film_poster_with_caption(chat.id, film, caption)
-
-                        case "FilmLikeActivity":
-                            film = activity["film"]
-                            member = activity["member"]
-                            film_stats = letterboxd_client.get_film_statistics(film["id"])
-
-                            caption = "❤️ {} liked:\n".format(
-                                Util.escape(member["displayName"]),
-                            )
-
-                            caption += "\n"
-                            caption += Util.film_title_and_year_line(film)
-                            caption += Util.directors_line(film)
-                            caption += Util.average_rating_line(film, film_stats)
-                            caption += Util.film_stats_line(film_stats)
-
-                            await Util.send_film_poster_with_caption(chat.id, film, caption)
-
-                        case "FilmRatingActivity":
-                            film = activity["film"]
-                            member = activity["member"]
-                            film_stats = letterboxd_client.get_film_statistics(film["id"])
-
-                            caption = "⭐ {} rated:\n".format(
-                                Util.escape(member["displayName"]),
-                            )
-
-                            caption += Util.escape(
-                                f"{Util.get_star_string(activity['rating'])}\n"
-                            )
-
-                            caption += "\n"
-                            caption += Util.film_title_and_year_line(film)
-                            caption += Util.directors_line(film)
-                            caption += Util.average_rating_line(film, film_stats)
-                            caption += Util.film_stats_line(film_stats)
-
-                            await Util.send_film_poster_with_caption(chat.id, film, caption)
-
-                        case "ReviewActivity":
-                            review_entry = activity["review"]
-                            film = review_entry["film"]
-                            member = activity["member"]
-                            film_stats = letterboxd_client.get_film_statistics(film["id"])
-
-                            caption = "📝 {} reviewed:\n".format(
-                                Util.escape(member["displayName"]),
-                            )
-
-                            caption += Util.log_details_line(review_entry)
-                            caption += Util.log_tags_line(review_entry)
-                            caption += "\n"
-                            caption += Util.film_title_and_year_line(film)
-                            caption += Util.directors_line(film)
-                            caption += Util.average_rating_line(film, film_stats)
-                            caption += Util.film_stats_line(film_stats)
-
-                            await Util.send_film_poster_with_caption(chat.id, film, caption)
-                            await Util.send_review_message(chat.id, review_entry["review"])
-
+                for event in events:
+                    await send_member_event(chat.id, event)
                     await asyncio.sleep(4)
 
-                    print(activity["type"])
-
-                follow_member.last_checked_at = datetime.now(timezone.utc)
+                follow_member.last_checked_at = events[-1].when_created
                 session.commit()
 
         logging.info("Done. Sleeping for 5 minutes")
-        await asyncio.sleep(300)
+        await asyncio.sleep(120)
+
 
 def main():
     asyncio.run(notify())
+
 
 if __name__ == "__main__":
     main()
