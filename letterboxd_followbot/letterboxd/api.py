@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
 import httpx
+from typing import Self
+
+from letterboxd_followbot.config import Config
 
 
 class LetterboxdClient:
@@ -16,6 +19,10 @@ class LetterboxdClient:
         self.client = httpx.Client()
 
         self.__acquire_access_token()
+
+    @classmethod
+    def from_config(cls) -> Self:
+        return cls(Config.LETTERBOXD_CLIENT_ID, Config.LETTERBOXD_CLIENT_SECRET)
 
     def __acquire_access_token(self) -> None:
         url = f"{self.base_url}/auth/token"
@@ -79,6 +86,33 @@ class LetterboxdClient:
         self.__refresh_access_token()
 
         response = self.client.get(f"{self.base_url}/film/{film_id}/statistics")
+
+        response.raise_for_status()
+        return response.json()
+
+    def get_films(
+        self,
+        sort: str = None,
+        member: str = None,
+        member_relationship: str = None,
+        cursor: str = None,
+        per_page: int = None,
+    ) -> dict:
+        self.__refresh_access_token()
+
+        params = []
+        if sort is not None:
+            params.append(("sort", sort))
+        if member is not None:
+            params.append(("member", member))
+        if member_relationship is not None:
+            params.append(("memberRelationship", member_relationship))
+        if cursor is not None:
+            params.append(("cursor", cursor))
+        if per_page is not None:
+            params.append(("perPage", per_page))
+
+        response = self.client.get(f"{self.base_url}/films", params=params)
 
         response.raise_for_status()
         return response.json()

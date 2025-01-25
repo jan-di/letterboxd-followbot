@@ -11,6 +11,7 @@ from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
+
 class Base(DeclarativeBase):
     pass
 
@@ -54,3 +55,15 @@ class FollowMember(Base):
 
     def __repr__(self) -> str:
         return f"FollowMember(id={self.id!r}, chat_id={self.chat_id!r}, member_id={self.member_id!r}, type={self.type!r})"
+
+
+class PopularTodo(Base):
+    __tablename__ = "popular_todo"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(ForeignKey("chat.id"))
+    member_id: Mapped[int]
+    next_rank: Mapped[int] = mapped_column(nullable=True)
+    next_film_id: Mapped[str] = mapped_column(nullable=True)
+
+    def __repr__(self) -> str:
+        return f"PopularTodo(id={self.id!r}, chat_id={self.chat_id!r}, next_rank={self.next_rank!r}, next_film_id={self.next_film_id!r})"

@@ -17,9 +17,12 @@ import dotenv
 from letterboxd_followbot.database.model import (
     Chat,
     FollowMember,
+    PopularTodo,
 )
 from letterboxd_followbot.letterboxd.api import LetterboxdClient
 from letterboxd_followbot.telegram.util import Util as TelegramUtil
+from letterboxd_followbot.config import Config
+from letterboxd_followbot.letterboxd.ext import LetterboxdExt
 
 engine = create_engine("sqlite:///data/local.db")
 
@@ -27,10 +30,6 @@ dotenv.load_dotenv()
 
 TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 app = ApplicationBuilder().token(TG_TOKEN).build()
-
-LETTERBOXD_CLIENT_ID = os.environ.get("LETTERBOXD_CLIENT_ID")
-LETTERBOXD_CLIENT_SECRET = os.environ.get("LETTERBOXD_CLIENT_SECRET")
-letterboxd_client = LetterboxdClient(LETTERBOXD_CLIENT_ID, LETTERBOXD_CLIENT_SECRET)
 
 
 @dataclass
@@ -66,7 +65,7 @@ class ActivityHandler:
         cursor = None
         result = []
         while not done:
-            activities = letterboxd_client.get_member_own_activity(
+            activities = self.letterboxd_client.get_member_own_activity(
                 member_id,
                 include=self.ACTIVITY_TYPES.keys(),
                 cursor=cursor,
@@ -127,7 +126,7 @@ class ActivityHandler:
         review_entry = activity["review"]
         film = review_entry["film"]
         member = activity["member"]
-        film_stats = letterboxd_client.get_film_statistics(film["id"])
+        film_stats = self.letterboxd_client.get_film_statistics(film["id"])
 
         caption = "📝 {} reviewed:\n".format(
             TelegramUtil.escape_md(member["displayName"]),
@@ -143,7 +142,7 @@ class ActivityHandler:
     def _process_watchlist_activity(self, activity: dict) -> MemberEvent:
         film = activity["film"]
         member = activity["member"]
-        film_stats = letterboxd_client.get_film_statistics(film["id"])
+        film_stats = self.letterboxd_client.get_film_statistics(film["id"])
 
         caption = "⌛ {} added to {} watchlist:\n".format(
             TelegramUtil.escape_md(member["displayName"]),
@@ -158,7 +157,7 @@ class ActivityHandler:
     def _process_film_like_activity(self, activity: dict) -> MemberEvent:
         film = activity["film"]
         member = activity["member"]
-        film_stats = letterboxd_client.get_film_statistics(film["id"])
+        film_stats = self.letterboxd_client.get_film_statistics(film["id"])
 
         caption = "❤️ {} liked:\n".format(
             TelegramUtil.escape_md(member["displayName"]),
@@ -172,7 +171,7 @@ class ActivityHandler:
     def _process_film_rating_activity(self, activity: dict) -> MemberEvent:
         film = activity["film"]
         member = activity["member"]
-        film_stats = letterboxd_client.get_film_statistics(film["id"])
+        film_stats = self.letterboxd_client.get_film_statistics(film["id"])
 
         caption = "⭐ {} rated:\n".format(
             TelegramUtil.escape_md(member["displayName"]),
@@ -337,6 +336,8 @@ async def send_member_event(chat_id: int, event: MemberEvent):
 async def notify():
     logging.basicConfig(level=logging.INFO)
 
+    letterboxd_client = LetterboxdClient.from_config()
+
     while True:
         with Session(engine) as session:
             # iterate over all follow members
@@ -378,12 +379,50 @@ async def notify():
                 follow_member.last_checked_at = events[-1].when_created
                 session.commit()
 
-        logging.info("Done. Sleeping for 5 minutes")
-        await asyncio.sleep(120)
+        logging.info("Done. Sleeping for 2 minutes")
+        await asyncio.sleep(2 * 60)
+
+
+async def todo_popular():
+    logger = logging.getLogger("todo_popular")
+    letterboxd_client = LetterboxdClient.from_config()
+    letterboxd_ext = LetterboxdExt(letterboxd_client)
+
+    logger.info("Starting todo_popular")
+
+    with Session(engine) as session:
+        for popular_todo in session.query(PopularTodo).all():
+            chat = session.get(Chat, popular_todo.chat_id)
+            next_film, next_film_rank = letterboxd_ext.get_next_popular_movie(popular_todo.member_id)
+
+            if next_film != popular_todo.next_film_id or next_film_rank != popular_todo.next_rank:
+                photo_url = next_film["poster"]["sizes"][-1]["url"]
+                caption = "🎥 Next popular movie\: \#{} [{}]({})".format(
+                    next_film_rank,
+                    TelegramUtil.escape_md(next_film["name"]),
+                    next_film["links"][0]["url"],
+                )
+
+                await app.bot.send_photo(chat.id, photo_url, caption=caption, parse_mode="MarkdownV2")
+
+                popular_todo.next_film_id = next_film["id"]
+                popular_todo.next_rank = next_film_rank
+                session.commit()
+
+        logger.info("Done. Sleeping for 60 minutes")
+        await asyncio.sleep(60 * 60)
 
 
 def main():
-    asyncio.run(notify())
+    Config.load()
+    return asyncio.run(main_threads())
+
+
+async def main_threads():
+    await asyncio.gather(
+        notify(),
+        todo_popular(),
+    )
 
 
 if __name__ == "__main__":
