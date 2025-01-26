@@ -232,6 +232,8 @@ class ActivityHandler:
         return line
 
     def __film_directors_line(self, film: dict) -> str:
+        if "directors" not in film or len(film["directors"]) == 0:
+            return ""
         line = TelegramUtil.escape_md(f"{film['directors'][0]['name']}")
         if len(film["directors"]) > 1:
             line += TelegramUtil.escape_md(f" + {len(film['directors']) - 1}")
@@ -393,9 +395,14 @@ async def todo_popular():
     with Session(engine) as session:
         for popular_todo in session.query(PopularTodo).all():
             chat = session.get(Chat, popular_todo.chat_id)
-            next_film, next_film_rank = letterboxd_ext.get_next_popular_movie(popular_todo.member_id)
+            next_film, next_film_rank = letterboxd_ext.get_next_popular_movie(
+                popular_todo.member_id
+            )
 
-            if next_film != popular_todo.next_film_id or next_film_rank != popular_todo.next_rank:
+            if (
+                next_film != popular_todo.next_film_id
+                or next_film_rank != popular_todo.next_rank
+            ):
                 photo_url = next_film["poster"]["sizes"][-1]["url"]
                 caption = "🎥 Next popular movie\: \#{} [{}]({})".format(
                     next_film_rank,
@@ -403,7 +410,9 @@ async def todo_popular():
                     next_film["links"][0]["url"],
                 )
 
-                await app.bot.send_photo(chat.id, photo_url, caption=caption, parse_mode="MarkdownV2")
+                await app.bot.send_photo(
+                    chat.id, photo_url, caption=caption, parse_mode="MarkdownV2"
+                )
 
                 popular_todo.next_film_id = next_film["id"]
                 popular_todo.next_rank = next_film_rank
