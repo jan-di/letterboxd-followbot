@@ -400,11 +400,11 @@ async def todo_popular():
             )
 
             if (
-                next_film != popular_todo.next_film_id
+                next_film["id"] != popular_todo.next_film_id
                 or next_film_rank != popular_todo.next_rank
             ):
                 photo_url = next_film["poster"]["sizes"][-1]["url"]
-                caption = "🎥 Next popular movie\: \#{} [{}]({})".format(
+                caption = "🎥 Next popular movie: \#{} [{}]({})".format(
                     next_film_rank,
                     TelegramUtil.escape_md(next_film["name"]),
                     next_film["links"][0]["url"],
