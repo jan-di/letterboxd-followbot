@@ -238,7 +238,7 @@ class ActivityHandler:
             return ""
         line = TelegramUtil.escape_md(f"{film['directors'][0]['name']}")
         if len(film["directors"]) > 1:
-            line += TelegramUtil.escape_md(f" + {len(film['directors']) - 1}")
+            line += TelegramUtil.escape_md(f" +{len(film['directors']) - 1}")
         return f"{line}\n"
 
     def __film_rating_line(self, film: dict, film_stats: dict) -> str:
