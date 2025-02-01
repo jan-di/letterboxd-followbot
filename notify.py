@@ -187,6 +187,8 @@ class ActivityHandler:
     #     pass
 
     def __get_largest_compatible_poster_url(self, film: dict) -> dict:
+        if "poster" not in film:
+            return None
         largest_poster = film["poster"]["sizes"][-1]
         # TODO check for max width, height and ratio
         return largest_poster["url"]
