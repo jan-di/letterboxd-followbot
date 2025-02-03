@@ -61,6 +61,10 @@ class LetterboxdClient:
         response.raise_for_status()
         return response.json()
 
+    def search_film_via_imdb_id(self, imdb_id: str) -> dict:
+        response = self.search(input=f"imdb:{imdb_id}", include=["FilmSearchItem"])
+        return response["items"][0]["film"]
+
     def get_member_own_activity(
         self, member_id: str, include: list[str] = [], cursor: str = None
     ) -> dict:
@@ -78,8 +82,21 @@ class LetterboxdClient:
 
         response.raise_for_status()
 
-        # entry["timestamp"] = datetime.fromisoformat(entry["timestamp"])
+        return response.json()
 
+    def get_member_watchlist(
+        self, member_id: str, cursor: str = None, per_page: str = 20
+    ) -> dict:
+        self.__refresh_access_token()
+
+        response = self.client.get(f"{self.base_url}/member/{member_id}/watchlist")
+        params = []
+        if cursor is not None:
+            params.append(("cursor", cursor))
+        if per_page is not None:
+            params.append(("perPage", per_page))
+
+        response.raise_for_status()
         return response.json()
 
     def get_film_statistics(self, film_id: str) -> dict:
